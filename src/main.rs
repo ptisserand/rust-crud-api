@@ -58,7 +58,7 @@ fn handle_client(mut stream: TcpStream) {
                 r if r.starts_with("GET /users/") => handle_get_request(r),
                 r if r.starts_with("GET /users") => handle_get_all_request(r),
                 r if r.starts_with("PUT /users/") => handle_put_request(r),
-                r if r.starts_with("DELETE  /users/") => handle_delete_request(r),
+                r if r.starts_with("DELETE /users/") => handle_delete_request(r),
                 _ => (NOT_FOUND.to_string(), "404 Not found".to_string())
             };
 
@@ -97,7 +97,7 @@ fn handle_get_request(request: &str) -> (String, String) {
                     };
                     (OK_RESPONSE.to_string(), serde_json::to_string(&user).unwrap())
                 }
-                _  => (NOT_FOUND.to_string(), format!("User {} not found", id).to_string()),
+                _  => (NOT_FOUND.to_string(), format!("User {} not found", id)),
             }
         }
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
@@ -135,7 +135,7 @@ fn handle_put_request(request: &str) -> (String, String) {
                 &[&user.name, &user.email, &id]
             ).unwrap();
 
-            (OK_RESPONSE.to_string(), format!("User {} updated", id).to_string())
+            (OK_RESPONSE.to_string(), format!("User {} updated", id))
         }
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
     }
@@ -146,10 +146,10 @@ fn handle_delete_request(request: &str) -> (String, String) {
         (Ok(id), Ok(mut client)) => {
             let rows_affected = client.execute("DELETE FROM users WHERE id = $1", &[&id]).unwrap();
             if rows_affected == 0 {
-                return (NOT_FOUND.to_string(), format!("User {} not found", id).to_string());
+                return (NOT_FOUND.to_string(), format!("User {} not found", id));
             }
 
-            (OK_RESPONSE.to_string(), format!("User {} deleted", id).to_string())
+            (OK_RESPONSE.to_string(), format!("User {} deleted", id))
         }
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
     }
@@ -161,13 +161,12 @@ fn set_database() -> Result<(), PostGresError> {
     let mut client = Client::connect(DB_URL, NoTls)?;
 
     // Create table
-    client.execute(
+    client.batch_execute(
         "CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             name VARCHAR NOT NULL,
             email VARCHAR NOT NULL
-        )", &[]
-    )?;
+        )")?;
     Ok(())
 }
 
