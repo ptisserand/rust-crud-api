@@ -1,7 +1,11 @@
-use postgres::{Client, NoTls};
-use postgres::Error as PostGresError;
-use std::net::{TcpListener, TcpStream};
-use std::io::{ Read, Write};
+use actix_web::middleware::Logger;
+use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, Result};
+use env_logger::Env;
+use log::{info, LevelFilter};
+use std::sync::{Arc, Mutex};
+
+use tokio_postgres::{Client, NoTls};
+
 #[macro_use]
 extern crate serde_derive;
 
@@ -10,41 +14,13 @@ extern crate serde_derive;
 struct User {
     id: Option<i32>,
     name: String,
-    email: String
+    email: String,
 }
 
 // DATABASE URL
 const DB_URL: &str = env!("DATABASE_URL");
 
-const OK_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n";
-const NOT_FOUND: &str = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
-const INTERNAL_SERVER_ERROR: &str  = "HTTP/1.1 500 INTERNAL SERVER ERROR\r\n\r\n";
-
-// main function
-fn main() {
-    // set database
-    if let Err(e) =  set_database() {
-        println!("Error: {}", e);
-        return;
-    }
-
-    // start server and print port
-    let listener = TcpListener::bind(format!("0.0.0.0:8080")).unwrap();
-    println!("Server started at port 8080");
-
-    // handle the client
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                handle_client(stream);
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-            }
-        }
-    }
-}
-
+/*
 fn handle_client(mut stream: TcpStream) {
     let mut buffer = [0; 1024];
     let mut request = String::new();
@@ -69,15 +45,38 @@ fn handle_client(mut stream: TcpStream) {
         }
     }
 }
+*/
 
+#[get("/users")]
+async fn get_users(db: web::Data<Arc<Mutex<Client>>>) -> impl Responder {
+    info!("Retrieving list of users");
+    let client = db.lock().unwrap();
+    let mut users = Vec::new();
+    for row in client.query("SELECT * from users", &[]).await.unwrap() {
+        users.push(User {
+            id: row.get(0),
+            name: row.get(1),
+            email: row.get(2),
+        });
+    }
+
+    HttpResponse::Ok().json(users)
+}
+
+/*
 // CONTROLLERS
 fn handle_post_request(request: &str) -> (String, String) {
-    match (get_user_request_body(&request), Client::connect(DB_URL, NoTls)) {
+    match (
+        get_user_request_body(&request),
+        Client::connect(DB_URL, NoTls),
+    ) {
         (Ok(user), Ok(mut client)) => {
-            client.execute(
-            "INSERT INTO users (name, email) VALUES ($1, $2)",
-            &[&user.name, &user.email]
-            ).unwrap();
+            client
+                .execute(
+                    "INSERT INTO users (name, email) VALUES ($1, $2)",
+                    &[&user.name, &user.email],
+                )
+                .unwrap();
 
             (OK_RESPONSE.to_string(), "User created".to_string())
         }
@@ -86,18 +85,24 @@ fn handle_post_request(request: &str) -> (String, String) {
 }
 
 fn handle_get_request(request: &str) -> (String, String) {
-    match (get_id(&request).parse::<i32>(), Client::connect(DB_URL, NoTls)) {
+    match (
+        get_id(&request).parse::<i32>(),
+        Client::connect(DB_URL, NoTls),
+    ) {
         (Ok(id), Ok(mut client)) => {
-           match client.query_one("SELECT * FROM users WHERE id = $1", &[&id]) {
+            match client.query_one("SELECT * FROM users WHERE id = $1", &[&id]) {
                 Ok(row) => {
                     let user = User {
                         id: row.get(0),
                         name: row.get(1),
                         email: row.get(2),
                     };
-                    (OK_RESPONSE.to_string(), serde_json::to_string(&user).unwrap())
+                    (
+                        OK_RESPONSE.to_string(),
+                        serde_json::to_string(&user).unwrap(),
+                    )
                 }
-                _  => (NOT_FOUND.to_string(), format!("User {} not found", id)),
+                _ => (NOT_FOUND.to_string(), format!("User {} not found", id)),
             }
         }
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
@@ -107,17 +112,20 @@ fn handle_get_request(request: &str) -> (String, String) {
 fn handle_get_all_request(_request: &str) -> (String, String) {
     match Client::connect(DB_URL, NoTls) {
         Ok(mut client) => {
-            let mut users =Vec::new();
+            let mut users = Vec::new();
 
             for row in client.query("SELECT * FROM users", &[]).unwrap() {
-                users.push(User{
-                    id:  row.get(0),
+                users.push(User {
+                    id: row.get(0),
                     name: row.get(1),
                     email: row.get(2),
                 });
             }
 
-            (OK_RESPONSE.to_string(), serde_json::to_string(&users).unwrap())
+            (
+                OK_RESPONSE.to_string(),
+                serde_json::to_string(&users).unwrap(),
+            )
         }
         _ => (INTERNAL_SERVER_ERROR.to_string(), "Error".to_string()),
     }
@@ -127,13 +135,15 @@ fn handle_put_request(request: &str) -> (String, String) {
     match (
         get_id(&request).parse::<i32>(),
         get_user_request_body(&request),
-        Client::connect(DB_URL, NoTls)
+        Client::connect(DB_URL, NoTls),
     ) {
         (Ok(id), Ok(user), Ok(mut client)) => {
-            client.execute(
-                "UPDATE users SET name = $1, email = $2 WHERE id = $3",
-                &[&user.name, &user.email, &id]
-            ).unwrap();
+            client
+                .execute(
+                    "UPDATE users SET name = $1, email = $2 WHERE id = $3",
+                    &[&user.name, &user.email, &id],
+                )
+                .unwrap();
 
             (OK_RESPONSE.to_string(), format!("User {} updated", id))
         }
@@ -142,9 +152,14 @@ fn handle_put_request(request: &str) -> (String, String) {
 }
 
 fn handle_delete_request(request: &str) -> (String, String) {
-    match (get_id(&request).parse::<i32>(), Client::connect(DB_URL, NoTls)) {
+    match (
+        get_id(&request).parse::<i32>(),
+        Client::connect(DB_URL, NoTls),
+    ) {
         (Ok(id), Ok(mut client)) => {
-            let rows_affected = client.execute("DELETE FROM users WHERE id = $1", &[&id]).unwrap();
+            let rows_affected = client
+                .execute("DELETE FROM users WHERE id = $1", &[&id])
+                .unwrap();
             if rows_affected == 0 {
                 return (NOT_FOUND.to_string(), format!("User {} not found", id));
             }
@@ -155,26 +170,51 @@ fn handle_delete_request(request: &str) -> (String, String) {
     }
 }
 
+*/
 
-fn set_database() -> Result<(), PostGresError> {
+// main function
+#[actix_web::main]
+async fn main() -> Result<(), std::io::Error> {
+    // Initialize the logger
+    env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .format_module_path(false)
+        .init();
+
+    info!("Setup database");
+    // set database
+    let db_client = Arc::new(Mutex::new(
+        setup_database().await.expect("Failed to connect to DB"),
+    ));
+    HttpServer::new(move || {
+        App::new()
+            .wrap(Logger::default())
+            .app_data(web::Data::new(db_client.clone()))
+            .service(get_users)
+    })
+    .bind(("0.0.0.0", 8080))?
+    .run()
+    .await
+}
+
+async fn setup_database() -> Result<tokio_postgres::Client, tokio_postgres::Error> {
     // connect to database
-    let mut client = Client::connect(DB_URL, NoTls)?;
+    let (client, connection) = tokio_postgres::connect(DB_URL, NoTls).await?;
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("Connection error: {}", e);
+        }
+    });
 
     // Create table
-    client.batch_execute(
-        "CREATE TABLE IF NOT EXISTS users (
+    client
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             name VARCHAR NOT NULL,
             email VARCHAR NOT NULL
-        )")?;
-    Ok(())
-}
-
-fn get_id(request: &str) -> &str {
-    request.split("/").nth(2).unwrap_or_default().split_whitespace().next().unwrap_or_default()
-}
-
-// deserialize user from request body with the id
-fn get_user_request_body(request: &str) -> Result<User, serde_json::Error> {
-    serde_json::from_str(request.split("\r\n\r\n").last().unwrap_or_default())
+        )",
+        )
+        .await?;
+    Ok(client)
 }
